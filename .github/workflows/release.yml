@@ -1,0 +1,127 @@
+# Hardened release pipeline.
+#
+# Security properties (maps to design doc §9 / §14):
+#   - All third-party actions pinned to a full 40-char commit SHA (not a tag).
+#     The "# vX.Y.Z" comment is informational only; the SHA is the trust anchor.
+#   - Minimal default permissions; jobs widen scope only where required.
+#   - npm publish + GitHub release gated behind a protected Environment that
+#     requires manual approval.
+#   - SBOM generated and attached.
+#   - Build provenance via GitHub artifact attestation + npm provenance.
+#   - Every platform binary is checksummed; checksums are attested.
+#
+# REPLACE every <PIN_...> below with the real commit SHA of the version you
+# audited. CI must fail closed if any action is referenced by a mutable tag.
+
+name: release
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read   # default: read-only. Jobs opt-in to more.
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write          # required for build provenance attestation
+      attestations: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: ubuntu-latest,  target: x86_64-linux }
+          - { os: ubuntu-latest,  target: aarch64-linux }
+          - { os: macos-latest,   target: x86_64-macos }
+          - { os: macos-latest,   target: aarch64-macos }
+          - { os: windows-latest, target: x86_64-windows }
+          - { os: windows-latest, target: aarch64-windows }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@<PIN_actions_checkout_sha>   # v4.x — pin to SHA
+
+      - name: Install Zig (pinned version + verified hash)
+        uses: mlugg/setup-zig@<PIN_setup_zig_sha>           # pin to SHA
+        with:
+          version: "0.14.0"                                 # exact, never "latest"
+
+      - name: Build (ReleaseSafe, cross-compiled)
+        working-directory: zig
+        run: zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseSafe
+
+      - name: Zig unit tests
+        working-directory: zig
+        run: zig build test
+
+      - name: Stage + checksum binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          bin="zig/zig-out/bin/codex-accounts"
+          [ "${{ runner.os }}" = "Windows" ] && bin="${bin}.exe"
+          cp "$bin" "dist/codex-accounts-${{ matrix.target }}"
+          ( cd dist && sha256sum "codex-accounts-${{ matrix.target }}"* > "SHA256SUMS-${{ matrix.target }}.txt" )
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@<PIN_attest_sha>  # pin to SHA
+        with:
+          subject-path: dist/codex-accounts-${{ matrix.target }}*
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@<PIN_upload_artifact_sha>  # pin to SHA
+        with:
+          name: dist-${{ matrix.target }}
+          path: dist/
+
+  sbom:
+    name: SBOM
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@<PIN_actions_checkout_sha>
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@<PIN_sbom_action_sha>         # pin to SHA
+        with:
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+      - uses: actions/upload-artifact@<PIN_upload_artifact_sha>
+        with: { name: sbom, path: sbom.cdx.json }
+
+  publish:
+    name: publish (manual approval)
+    needs: [build, sbom]
+    runs-on: ubuntu-latest
+    environment: release        # protected env: requires human approval
+    permissions:
+      contents: write           # create the GitHub Release
+      id-token: write           # npm provenance + attestation
+      attestations: write
+    steps:
+      - uses: actions/checkout@<PIN_actions_checkout_sha>
+      - uses: actions/download-artifact@<PIN_download_artifact_sha>
+        with: { path: artifacts }
+      - name: Assemble native/ tree from per-target artifacts
+        run: node scripts/assemble-native.js artifacts native
+      - name: Verify every binary against its attested checksum
+        run: node scripts/verify-checksums.js artifacts
+      - uses: actions/setup-node@<PIN_setup_node_sha>
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - name: Publish with provenance
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Attest npm tarball
+        uses: actions/attest-build-provenance@<PIN_attest_sha>
+        with:
+          subject-path: "*.tgz"

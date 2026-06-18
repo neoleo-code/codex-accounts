@@ -1,0 +1,29 @@
+# --- SECRETS: never commit real credentials ---
+# Codex auth files / account snapshots / registries
+auth.json
+*.auth.json
+**/auth.json
+**/auth.json.bak.*
+registry.json
+**/registry.json
+accounts/
+.codex/
+**/.login-tmp/
+*.pem
+*.key
+.env
+.env.*
+
+# --- build / deps ---
+node_modules/
+native/
+zig/zig-out/
+zig/.zig-cache/
+zig-cache/
+
+# --- packaging / os ---
+*.tgz
+*.zip
+.DS_Store
+Thumbs.db
+*.log

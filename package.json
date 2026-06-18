@@ -1,0 +1,22 @@
+{
+  "name": "@you/codex-accounts",
+  "version": "0.1.0",
+  "description": "Local multi-account manager for Codex / ChatGPT / OpenAI API. Manages only accounts you own or are authorized to use.",
+  "bin": {
+    "codex-accounts": "bin/codex-accounts.js"
+  },
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node test/run.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "native",
+    "README.md"
+  ],
+  "license": "MIT"
+}
