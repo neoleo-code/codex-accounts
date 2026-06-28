@@ -10,6 +10,7 @@ const path = require('path');
 const { resolveCodexHome } = require('./paths');
 const engine = require('./engine');
 const codex = require('./codex-format');
+const accts = require('./accounts');
 const { redact } = require('./redact');
 
 function out(obj) { process.stdout.write(JSON.stringify(obj, null, 2) + '\n'); }
@@ -39,7 +40,12 @@ function run(argv) {
     case 'web':
     case 'ui': {
       const portIdx = rest.indexOf('--port');
-      const port = portIdx >= 0 ? parseInt(rest[portIdx + 1], 10) : 4577;
+      let port = 4577;
+      if (portIdx >= 0) {
+        const n = parseInt(rest[portIdx + 1], 10);
+        if (Number.isInteger(n) && n > 0 && n < 65536) port = n;
+        else err(`invalid --port "${rest[portIdx + 1]}", using ${port}`);
+      }
       const noOpen = rest.includes('--no-open');
       require('./web').serve(p, { port, useCodex, open: !noOpen });
       return new Promise(() => {}); // keep process alive until Ctrl+C
@@ -54,11 +60,11 @@ function run(argv) {
     }
     case 'list':
     case 'ls': {
-      out(useCodex ? codex.list(p) : engine.list(p));
+      out(accts.list(p, useCodex));
       return 0;
     }
     case 'whoami': {
-      out(useCodex ? codex.whoami(p) : engine.whoami(p));
+      out(accts.whoami(p, useCodex));
       return 0;
     }
     case 'switch':
@@ -66,14 +72,7 @@ function run(argv) {
       const selector = f.positionals[0];
       if (!selector) { err('usage: switch <index|email|alias|accountId> [--restart]'); return 2; }
       const wantRestart = rest.includes('--restart');
-      let result;
-      if (useCodex) {
-        const r = codex.switchTo(p, selector);
-        result = { switched_to: r.email || r.account_key, account_key: r.account_key };
-      } else {
-        const r = engine.switchTo(p, selector);
-        result = { switched_to: r.entry.email || r.key, key: r.key };
-      }
+      const result = accts.switchTo(p, useCodex, selector);
       if (wantRestart) {
         const rr = require('./restart').restartCodex();
         result.restart = rr.ok ? `restarted ${rr.app}` : rr.reason;
@@ -95,8 +94,7 @@ function run(argv) {
         const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
         const objs = Array.isArray(parsed) ? parsed : [parsed];
         for (const o of objs) {
-          results.push(useCodex ? codex.upsertFromAuth(p, o, { alias: f.alias })
-            : engine.importAuthObject(p, o, { alias: f.alias }));
+          results.push(accts.upsert(p, useCodex, o, { alias: f.alias }));
         }
       };
       for (const fp of f.positionals) {
@@ -105,7 +103,7 @@ function run(argv) {
           for (const name of fs.readdirSync(fp)) if (name.endsWith('.json')) addFile(`${fp}/${name}`);
         } else addFile(fp);
       }
-      out(results.map((r) => ({ account: r.account_key || r.key, email: r.email || r.entry?.email })));
+      out(results.map((r) => ({ account: r.account_key, email: r.email })));
       return 0;
     }
     case 'inspect': {
@@ -140,19 +138,19 @@ function run(argv) {
 function renderMenubar(p, useCodex) {
   const exe = process.execPath;                         // absolute node path
   const cli = path.join(__dirname, '..', 'bin', 'codex-accounts.js');
-  let accounts = [];
-  try { accounts = useCodex ? codex.list(p) : engine.list(p); } catch (_) {}
-  const cur = accounts.find((a) => a.current);
+  let rows = [];
+  try { rows = accts.list(p, useCodex); } catch (_) {}
+  const cur = rows.find((a) => a.current);
   const title = cur ? `🤖 ${(cur.email || cur.account_key || '').split('@')[0]}` : '🤖 Codex';
 
   const L = [];
   L.push(title);
   L.push('---');
-  if (accounts.length === 0) {
+  if (rows.length === 0) {
     L.push('还没有账号 | color=#888888');
     L.push(`用命令行 login/import 添加 | bash="${exe}" param1="${cli}" param2="help" terminal=true`);
   }
-  for (const a of accounts) {
+  for (const a of rows) {
     const sel = a.email || a.account_key || a.alias || String(a.index);
     const used = a.usage_5h_percent != null ? `  (5h ${a.usage_5h_percent}%)` : '';
     if (a.current) {

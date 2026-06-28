@@ -55,9 +55,40 @@ function findRateLimits(obj) {
 }
 
 /** Scan one file from the end; return {rate_limits, ts} of the last match. */
+// Rate-limit events are appended near the end of an active session log, so we
+// only need the tail of the file. Reading a bounded window instead of the whole
+// (potentially multi-MB) jsonl keeps memory + CPU constant — important because
+// the menubar applet polls this on a short interval.
+const MAX_TAIL_BYTES = 512 * 1024;
+
+function readTail(file) {
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    const size = fs.fstatSync(fd).size;
+    const start = size > MAX_TAIL_BYTES ? size - MAX_TAIL_BYTES : 0;
+    const len = size - start;
+    const buf = Buffer.allocUnsafe(len);
+    fs.readSync(fd, buf, 0, len, start);
+    let text = buf.toString('utf8');
+    // If we started mid-file we may have a partial first line; drop it so we
+    // never feed a truncated JSON fragment to the parser.
+    if (start > 0) {
+      const nl = text.indexOf('\n');
+      if (nl !== -1) text = text.slice(nl + 1);
+    }
+    return text;
+  } catch (_) {
+    return null;
+  } finally {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch (_) {} }
+  }
+}
+
 function lastSnapshotInFile(file) {
-  let lines;
-  try { lines = fs.readFileSync(file, 'utf8').split('\n'); } catch (_) { return null; }
+  const text = readTail(file);
+  if (text == null) return null;
+  const lines = text.split('\n');
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i];
     if (!line || line.indexOf('rate_limits') === -1) continue;

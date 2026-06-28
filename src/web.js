@@ -15,8 +15,7 @@
 const http = require('http');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
-const engine = require('./engine');
-const codex = require('./codex-format');
+const accts = require('./accounts');
 
 function openBrowser(url) {
   const cmd = process.platform === 'darwin' ? 'open'
@@ -26,20 +25,13 @@ function openBrowser(url) {
 }
 
 function listAccounts(p, useCodex) {
-  return useCodex ? codex.list(p) : engine.list(p);
+  return accts.list(p, useCodex);
 }
 function whoami(p, useCodex) {
-  return useCodex ? codex.whoami(p) : engine.whoami(p);
+  return accts.whoami(p, useCodex);
 }
 function doSwitch(p, useCodex, selector, restart) {
-  let res;
-  if (useCodex) {
-    const r = codex.switchTo(p, selector);
-    res = { switched_to: r.email || r.account_key, account_key: r.account_key };
-  } else {
-    const r = engine.switchTo(p, selector);
-    res = { switched_to: r.entry.email || r.key, account_key: r.key };
-  }
+  const res = accts.switchTo(p, useCodex, selector);
   if (restart) {
     const rr = require('./restart').restartCodex();
     res.restart = rr.ok ? `restarted ${rr.app}` : rr.reason;
