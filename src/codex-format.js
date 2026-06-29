@@ -144,11 +144,27 @@ function switchTo(p, selector) {
     if (!v.ok) throw new Error(`snapshot has unsafe perms (${v.reason}); fix with: chmod 600 accounts/${acct.chatgpt_account_id}.json`);
 
     if (fs.existsSync(p.authFile)) {
+      const liveBuf = fs.readFileSync(p.authFile);
       const bak = path.join(p.accountsDir, `auth.json.bak.${tsStamp()}`);
       assertInside(p.home, bak);
-      atomicWriteFile(bak, fs.readFileSync(p.authFile), { mode0600: true });
+      atomicWriteFile(bak, liveBuf, { mode0600: true });
+      // SYNC-BACK: Codex rotates the refresh/access token during a session and
+      // writes the new one into the live auth.json. The per-account snapshot is
+      // only captured at import/login, so without this it goes stale and
+      // switching back loads an invalidated refresh token → forced re-login.
+      // Persist the live auth.json into ITS OWN account's snapshot (identified
+      // from the token), keeping that snapshot current. Best-effort: never let
+      // a sync-back problem block the switch itself.
+      try {
+        const liveAuth = JSON.parse(liveBuf.toString('utf8'));
+        const liveId = deriveIdentity(liveAuth);
+        const liveSnap = snapshotPath(p, liveId.chatgpt_account_id);
+        atomicWriteFile(liveSnap, JSON.stringify(liveAuth, null, 2) + '\n', { mode0600: true });
+      } catch (_) { /* unparseable / API-key-only auth: skip, keep stored snapshot */ }
     }
     assertInside(p.home, p.authFile);
+    // Read the target snapshot AFTER sync-back, so switching to the currently
+    // active account picks up the freshly-synced tokens rather than stale ones.
     atomicWriteFile(p.authFile, fs.readFileSync(snap), { mode0600: true });
 
     obj.active_account_key = acct.account_key;

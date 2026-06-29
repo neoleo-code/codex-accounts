@@ -31,9 +31,19 @@ function whoami(p, useCodex) {
   return accts.whoami(p, useCodex);
 }
 function doSwitch(p, useCodex, selector, restart) {
-  const res = accts.switchTo(p, useCodex, selector);
-  if (restart) {
-    const rr = require('./restart').restartCodex();
+  // Quit Codex before swapping auth.json (see restart.js for why ordering
+  // matters), then relaunch so it reads the new account.
+  const r = restart ? require('./restart') : null;
+  if (r) r.quitCodex();
+  let res;
+  try {
+    res = accts.switchTo(p, useCodex, selector);
+  } catch (e) {
+    if (r) r.launchCodex();
+    throw e;
+  }
+  if (r) {
+    const rr = r.launchCodex();
     res.restart = rr.ok ? `restarted ${rr.app}` : rr.reason;
   }
   return res;

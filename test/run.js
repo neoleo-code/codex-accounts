@@ -165,6 +165,32 @@ test('import two accounts then switch is atomic and consistent', () => {
   assert.strictEqual(who.previous, listed.find((x) => x.email === 'alice@example.com').key);
 });
 
+test('switch syncs rotated live tokens back into the previous snapshot', () => {
+  const home = mkHome();
+  const p = engine.init(home);
+  engine.importAuthObject(p, authObj('alice@example.com', 'acc-alice'), { alias: 'work' });
+  engine.importAuthObject(p, authObj('bob@example.com', 'acc-bob'), { alias: 'personal' });
+  const aliceKey = engine.list(p).find((x) => x.email === 'alice@example.com').key;
+
+  engine.switchTo(p, 'alice@example.com');
+  // Simulate Codex rotating the refresh token in the live auth.json while alice
+  // is the active account.
+  const live = JSON.parse(fs.readFileSync(p.authFile, 'utf8'));
+  live.refresh_token = 'rotated-token-xyz';
+  fs.writeFileSync(p.authFile, JSON.stringify(live));
+
+  // Switching away must capture alice's rotated token into her snapshot…
+  engine.switchTo(p, 'personal');
+  const aliceSnap = JSON.parse(fs.readFileSync(p.snapshot(aliceKey), 'utf8'));
+  assert.strictEqual(aliceSnap.refresh_token, 'rotated-token-xyz');
+
+  // …so switching back restores the rotated (still-valid) token, not the stale
+  // one captured at import.
+  engine.switchTo(p, 'alice@example.com');
+  const back = JSON.parse(fs.readFileSync(p.authFile, 'utf8'));
+  assert.strictEqual(back.refresh_token, 'rotated-token-xyz');
+});
+
 test('switch refuses world-readable snapshot (Unix)', function () {
   if (process.platform === 'win32') return;
   const home = mkHome();

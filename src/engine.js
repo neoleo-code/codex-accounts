@@ -88,12 +88,25 @@ function switchTo(p, selector) {
 
     // Back up current auth.json (if any) to previous slot file.
     if (fs.existsSync(p.authFile)) {
+      const liveBuf = fs.readFileSync(p.authFile);
       const backup = path.join(p.accountsDir, '.auth.previous.json');
       assertInside(p.home, backup);
-      atomicWriteFile(backup, fs.readFileSync(p.authFile), { mode0600: true });
+      atomicWriteFile(backup, liveBuf, { mode0600: true });
+      // SYNC-BACK: Codex rotates tokens into the live auth.json during a
+      // session; persist them into the currently-active account's snapshot so
+      // switching back never loads an invalidated refresh token (which would
+      // force a re-login). Best-effort — never block the switch.
+      if (registry.current) {
+        try {
+          const liveSnap = p.snapshot(registry.current);
+          assertInside(p.home, liveSnap);
+          atomicWriteFile(liveSnap, liveBuf, { mode0600: true });
+        } catch (_) { /* keep stored snapshot */ }
+      }
     }
 
     // Atomic replace of the live auth.json with the snapshot bytes.
+    // Read AFTER sync-back so re-selecting the active account stays fresh.
     const bytes = fs.readFileSync(snap);
     assertInside(p.home, p.authFile);
     atomicWriteFile(p.authFile, bytes, { mode0600: true });

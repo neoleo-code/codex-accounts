@@ -72,9 +72,20 @@ function run(argv) {
       const selector = f.positionals[0];
       if (!selector) { err('usage: switch <index|email|alias|accountId> [--restart]'); return 2; }
       const wantRestart = rest.includes('--restart');
-      const result = accts.switchTo(p, useCodex, selector);
-      if (wantRestart) {
-        const rr = require('./restart').restartCodex();
+      const restart = wantRestart ? require('./restart') : null;
+      // Quit Codex BEFORE swapping auth.json so it can't flush its old session
+      // over the swap on quit; the switch then syncs the now-flushed tokens
+      // back into the previous account's snapshot.
+      if (restart) restart.quitCodex();
+      let result;
+      try {
+        result = accts.switchTo(p, useCodex, selector);
+      } catch (e) {
+        if (restart) restart.launchCodex(); // don't leave the app closed on error
+        throw e;
+      }
+      if (restart) {
+        const rr = restart.launchCodex();
         result.restart = rr.ok ? `restarted ${rr.app}` : rr.reason;
       } else {
         result.note = 'Restart Codex CLI / VS Code extension / Codex App to pick up the new account (or use --restart).';
